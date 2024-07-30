@@ -209,18 +209,15 @@ type Type struct {
 	Type string `json:"type"`
 }
 
+// isArray returns true if the type is a fixed or variable sized array
 func (t *Type) isArray() bool {
-	return strings.HasSuffix(t.Type, "[]")
+	return len(strings.Split(t.Type, "[")) > 1
 }
 
-// typeName returns the canonical name of the type. If the type is 'Person[]', then
+// typeName returns the canonical name of the type. If the type is 'Person[]' or 'Person[2]', then
 // this method returns 'Person'
 func (t *Type) typeName() string {
-	if strings.Contains(t.Type, "[") {
-		re := regexp.MustCompile(`\[\d*\]`)
-		return re.ReplaceAllString(t.Type, "")
-	}
-	return t.Type
+	return strings.Split(t.Type, "[")[0]
 }
 
 type Types map[string][]Type
@@ -271,7 +268,7 @@ func (typedData *TypedData) HashStruct(primaryType string, data TypedDataMessage
 
 // Dependencies returns an array of custom types ordered by their hierarchical reference tree
 func (typedData *TypedData) Dependencies(primaryType string, found []string) []string {
-	primaryType = strings.TrimSuffix(primaryType, "[]")
+	primaryType = strings.Split(primaryType, "[")[0]
 	includes := func(arr []string, str string) bool {
 		for _, obj := range arr {
 			if obj == str {
@@ -357,34 +354,11 @@ func (typedData *TypedData) EncodeData(primaryType string, data map[string]inter
 		encType := field.Type
 		encValue := data[field.Name]
 		if encType[len(encType)-1:] == "]" {
-			arrayValue, err := convertDataToSlice(encValue)
-			if err != nil {
-				return nil, dataMismatchError(encType, encValue)
+			encodedData, encErr := typedData.encodeArrayValue(encValue, encType, depth)
+			if encErr != nil {
+				return nil, encErr
 			}
-
-			arrayBuffer := bytes.Buffer{}
-			parsedType := strings.Split(encType, "[")[0]
-			for _, item := range arrayValue {
-				if typedData.Types[parsedType] != nil {
-					mapValue, ok := item.(map[string]interface{})
-					if !ok {
-						return nil, dataMismatchError(parsedType, item)
-					}
-					encodedData, err := typedData.EncodeData(parsedType, mapValue, depth+1)
-					if err != nil {
-						return nil, err
-					}
-					arrayBuffer.Write(crypto.Keccak256(encodedData))
-				} else {
-					bytesValue, err := typedData.EncodePrimitiveValue(parsedType, item, depth)
-					if err != nil {
-						return nil, err
-					}
-					arrayBuffer.Write(bytesValue)
-				}
-			}
-
-			buffer.Write(crypto.Keccak256(arrayBuffer.Bytes()))
+			buffer.Write(encodedData)
 		} else if typedData.Types[field.Type] != nil {
 			mapValue, ok := encValue.(map[string]interface{})
 			if !ok {
@@ -404,6 +378,46 @@ func (typedData *TypedData) EncodeData(primaryType string, data map[string]inter
 		}
 	}
 	return buffer.Bytes(), nil
+}
+
+func (typedData *TypedData) encodeArrayValue(encValue interface{}, encType string, depth int) (hexutil.Bytes, error) {
+	arrayValue, err := convertDataToSlice(encValue)
+	if err != nil {
+		return nil, dataMismatchError(encType, encValue)
+	}
+
+	arrayBuffer := bytes.Buffer{}
+	parsedType := strings.Split(encType, "[")[0]
+	for _, item := range arrayValue {
+		if reflect.TypeOf(item).Kind() == reflect.Slice ||
+			reflect.TypeOf(item).Kind() == reflect.Array {
+			encodedData, encErr := typedData.encodeArrayValue(item, parsedType, depth+1)
+			if encErr != nil {
+				return nil, encErr
+			}
+			arrayBuffer.Write(encodedData)
+		} else {
+			if typedData.Types[parsedType] != nil {
+				mapValue, ok := item.(map[string]interface{})
+				if !ok {
+					return nil, dataMismatchError(parsedType, item)
+				}
+				encodedData, encErr := typedData.EncodeData(parsedType, mapValue, depth+1)
+				if encErr != nil {
+					return nil, encErr
+				}
+				digest := crypto.Keccak256(encodedData)
+				arrayBuffer.Write(digest)
+			} else {
+				bytesValue, encErr := typedData.EncodePrimitiveValue(parsedType, item, depth)
+				if encErr != nil {
+					return nil, encErr
+				}
+				arrayBuffer.Write(bytesValue)
+			}
+		}
+	}
+	return crypto.Keccak256(arrayBuffer.Bytes()), nil
 }
 
 // Attempt to parse bytes in different formats: byte array, hex string, hexutil.Bytes.
@@ -738,18 +752,13 @@ func (t Types) validate() error {
 
 // Checks if the primitive value is valid
 func isPrimitiveTypeValid(primitiveType string) bool {
+	primitiveType = strings.Split(primitiveType, "[")[0]
 	if primitiveType == "address" ||
-		primitiveType == "address[]" ||
 		primitiveType == "bool" ||
-		primitiveType == "bool[]" ||
 		primitiveType == "string" ||
-		primitiveType == "string[]" ||
 		primitiveType == "bytes" ||
-		primitiveType == "bytes[]" ||
 		primitiveType == "int" ||
-		primitiveType == "int[]" ||
-		primitiveType == "uint" ||
-		primitiveType == "uint[]" {
+		primitiveType == "uint" {
 		return true
 	}
 	// For 'bytesN', 'bytesN[]', we allow N from 1 to 32
