@@ -1,3 +1,13 @@
+## Immutable Fork of go-ethereum
+
+This fork adds hardhat compatibility to the latest release of go-ethereum provided by this commit https://github.com/immutable/geth/commit/3ab199a612a38976d1f7432434093a3a40b2fda2
+
+This branch tracks the current release of go-ethereum v1.15.11 https://github.com/immutable/geth/tree/upstream-v1.15.11
+
+In order to update branch from the forks latest go-ethereum release branch as described above and add the required changes. Tag and release this change and update services in the platform-services repo to point to the new release.
+
+current release v1.15.11-hardhat-compat 
+
 ## Go Ethereum
 
 Golang execution layer implementation of the Ethereum protocol.
